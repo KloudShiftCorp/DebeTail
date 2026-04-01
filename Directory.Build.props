@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>KloudShift GmbH</Authors>
+    <Copyright>Copyright © 2026 KloudShift GmbH</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/kloudshiftcorp/DebeTail</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/kloudshiftcorp/DebeTail</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>cdc;change-data-capture;debezium;dotnet;postgres;mysql;mariadb;</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+</Project>

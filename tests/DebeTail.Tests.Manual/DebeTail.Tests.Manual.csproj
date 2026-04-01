@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\..\src\DebeTail.Abstractions\DebeTail.Abstractions.csproj" />
+      <ProjectReference Include="..\..\src\DebeTail.Pipeline\DebeTail.Pipeline.csproj" />
+      <ProjectReference Include="..\..\src\DebeTail.Sinks.Console\DebeTail.Sinks.Console.csproj" />
+      <ProjectReference Include="..\..\src\DebeTail.Sources.MariaDb\DebeTail.Sources.MariaDb.csproj" />
+      <ProjectReference Include="..\..\src\DebeTail.Sources.Postgres\DebeTail.Sources.Postgres.csproj" />
+    </ItemGroup>
+      
+</Project>

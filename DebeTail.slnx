@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/misc/">
+    <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
+    <File Path="global.json" />
+    <File Path="LICENSE" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/DebeTail.Abstractions/DebeTail.Abstractions.csproj" />
+    <Project Path="src/DebeTail.Pipeline/DebeTail.Pipeline.csproj" />
+    <Project Path="src/DebeTail.Sinks.Console/DebeTail.Sinks.Console.csproj" />
+    <Project Path="src/DebeTail.Sources.MariaDb/DebeTail.Sources.MariaDb.csproj" />
+    <Project Path="src/DebeTail.Sources.Postgres/DebeTail.Sources.Postgres.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DebeTail.Testing/DebeTail.Testing.csproj" />
+    <Project Path="tests/DebeTail.Tests.Manual/DebeTail.Tests.Manual.csproj" />
+  </Folder>
+</Solution>

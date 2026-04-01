@@ -1,0 +1,39 @@
+﻿name: debetail-test
+services:
+  postgres:
+    image: postgres:17
+    container_name: postgres-container
+    pull_policy: missing
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: foobar9012.
+    command: -c wal_level=logical
+  
+  mysql:
+    image: mysql:8.4
+    container_name: mysql-container
+    pull_policy: missing
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: foobar9012.
+    command:
+      - --log-bin
+      - --binlog-format=row
+      - --binlog-row-image=full
+  
+  mariadb:
+    image: mariadb:11.8 # LTS version
+    container_name: mariadb-container
+    pull_policy: missing
+    ports:
+      - "3307:3306"
+    # https://mariadb.com/docs/server/server-management/automated-mariadb-deployment-and-administration/docker-and-mariadb/mariadb-server-docker-official-image-environment-variables
+    environment:
+      MARIADB_ROOT_PASSWORD: foobar9012.
+    command:
+      - --log-bin
+      - --binlog-format=row
+      - --binlog-row-image=full
+      - --server-id=1
