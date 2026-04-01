@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        # global.json in DebeTail-Free/ pins .NET 10 — setup-dotnet picks it up automatically
+
+      - name: Restore
+        run: dotnet restore DebeTail.slnx
+
+      - name: Build
+        run: dotnet build DebeTail.slnx --no-restore -c Release
+
+      - name: Test
+        run: dotnet test DebeTail.slnx --no-build -c Release --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: "**/test-results.trx"
+          if-no-files-found: ignore

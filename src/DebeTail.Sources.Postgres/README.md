@@ -43,17 +43,3 @@ select pg_drop_replication_slot('slotx');
 -- Remove publication
 drop publication pub1;
 ```
-
-## Message types
-
-**INSERT**
-- BeginMessage
-- RelationMessage
-- InsertMessage
-- CommitMessage
-
-**DELETE**
-- BeginMessage
-- RelationMessage
-- FullDeleteMessage
-- CommitMessage
