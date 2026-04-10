@@ -40,9 +40,9 @@ Reads database write events (INSERT, UPDATE, DELETE) via native replication mech
 Please be aware that this is an early version of the project and the limitations listed bellow currently apply. I am
 happy for any feedback and contributions 🚀.
 
-* **MariaDB/MySQL: multi-row DML emits only the first row** — bulk `INSERT ... VALUES (...),(...)`, multi-row `UPDATE`,
-  and multi-row `DELETE` statements produce one event per statement instead of one per row; remaining rows are silently
-  dropped
+* **MariaDB/MySQL: multi-row DML emits one event per row** — bulk `INSERT ... VALUES (...),(...)`, multi-row `UPDATE`,
+  and multi-row `DELETE` statements each produce one `DebeTailEnvelope` per affected row; all rows share the same
+  binlog offset
 * **At-least-once delivery only** — exactly-once is not supported; retries and crash-recovery replays can re-deliver the
   same event; consumers must deduplicate using `DebeTailEnvelope.EventId`. For Postgres the guarantee holds
   automatically across restarts via the replication slot; for MySQL/MariaDB and SQL Server it requires an

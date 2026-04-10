@@ -18,7 +18,15 @@ namespace KloudShift.DebeTail.Pipeline.OffsetStores;
 /// </summary>
 public sealed class FileOffsetStore : IOffsetStore
 {
-    private static readonly char[] InvalidChars = Path.GetInvalidFileNameChars();
+    // Fixed set of characters invalid in filenames on any supported platform (union of
+    // Windows, macOS, and Linux restrictions). Using a fixed set rather than
+    // Path.GetInvalidFileNameChars() ensures consistent filenames across platforms —
+    // e.g. ':' is valid on macOS/Linux but not on Windows.
+    private static readonly HashSet<char> InvalidChars =
+    [
+        '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0',
+        ..Enumerable.Range(1, 31).Select(i => (char)i), // control characters
+    ];
 
     private readonly string _directory;
     private readonly ILogger<FileOffsetStore> _logger;
@@ -89,8 +97,8 @@ public sealed class FileOffsetStore : IOffsetStore
 
     private string FilePath(string connectorId)
     {
-        // Replace file-system-invalid characters (e.g. ':' in "mariadb:host:3306") with underscores.
-        var safe = string.Concat(connectorId.Select(c => Array.IndexOf(InvalidChars, c) >= 0 ? '_' : c));
+        // Replace characters invalid on any platform (e.g. ':' in "mariadb:host:3306") with a dash
+        var safe = string.Concat(connectorId.Select(c => InvalidChars.Contains(c) ? '-' : c));
         return Path.Combine(_directory, $"{safe}.json");
     }
 
