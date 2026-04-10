@@ -96,7 +96,17 @@ public sealed partial class PostgresSourceConnector : ISourceConnector
             return Task.CompletedTask;
 
         if (NpgsqlLogSequenceNumber.TryParse(offset.Value, out var lsn))
-            connection.SetReplicationStatus(lsn);
+        {
+            try
+            {
+                connection.SetReplicationStatus(lsn);
+            }
+            catch (ObjectDisposedException)
+            {
+                // ReadAsync disposed the connection concurrently during shutdown.
+                // Nothing to acknowledge — the slot position will replay on next startup.
+            }
+        }
         else
             _logger.LogWarning("Could not parse WAL offset for acknowledgement: {Offset}", offset.Value);
 
