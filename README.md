@@ -5,6 +5,7 @@ C# and targeting enterprise .NET consumers.
 
 Reads database write events (INSERT, UPDATE, DELETE) via native replication mechanisms, normalizes them into a
 `DebeTailEnvelope`, and routes them to message brokers or storage sinks.
+
 ---
 
 ## Features
