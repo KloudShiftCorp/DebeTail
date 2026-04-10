@@ -100,8 +100,8 @@ public sealed partial class MariaDbSourceConnector : ISourceConnector
                 continue;
             }
 
-            var raw = await DecodeEventAsync(header, binlogEvent, client, ct);
-            if (raw is not null) yield return raw;
+            foreach (var raw in await DecodeEventAsync(header, binlogEvent, client, ct))
+                yield return raw;
         }
     }
 

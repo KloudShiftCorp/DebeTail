@@ -137,27 +137,22 @@ internal sealed class DebeTailPipelineRunner : IDebeTailPipeline
                 if (_enrichmentSteps.Count > 0)
                     envelope = await ApplyEnrichmentAsync(envelope, ct);
 
+                // Start the age window when the batch opens, not when the loop starts.
+                // This prevents a stale batchStarted (set before the source connects) from
+                // causing the first event to immediately trigger a flush of a single-item batch.
+                if (batch.Count == 0)
+                    batchStarted = DateTimeOffset.UtcNow;
+
                 batch.Add(envelope);
                 lastOffset = raw.Offset;
 
-                // Flush when batch is full or has aged past the max batch window.
-                // Guard on batch.Count > 0 to avoid flushing an empty batch when all
-                // events in the window were filtered — which would send a spurious empty
-                // write to the sink and re-acknowledge a stale offset from a prior batch.
                 var batchFull = batch.Count >= _options.MaxBatchSize;
                 var batchAged = DateTimeOffset.UtcNow - batchStarted >= _options.MaxBatchAge;
 
-                if ((batchFull || batchAged) && batch.Count > 0)
+                if (batchFull || batchAged)
                 {
                     await FlushBatchAsync(batch, lastOffset, ct);
                     batch.Clear();
-                    batchStarted = DateTimeOffset.UtcNow;
-                }
-                else if (batchAged)
-                {
-                    // Batch is empty but the window has elapsed — reset the timer so the
-                    // next event doesn't immediately trigger a flush of a single-item batch.
-                    batchStarted = DateTimeOffset.UtcNow;
                 }
             }
 

@@ -7,7 +7,7 @@ namespace KloudShift.DebeTail.Sources.MariaDb;
 
 public sealed partial class MariaDbSourceConnector
 {
-    private async Task<RawChangeEvent?> DecodeEventAsync(
+    private async Task<IReadOnlyList<RawChangeEvent>> DecodeEventAsync(
         EventHeader header, IBinlogEvent binlogEvent, BinlogClient client, CancellationToken ct)
     {
         return binlogEvent switch
@@ -15,87 +15,102 @@ public sealed partial class MariaDbSourceConnector
             WriteRowsEvent write => await DecodeWriteRowsAsync(header, write, client, ct),
             UpdateRowsEvent update => await DecodeUpdateRowsAsync(header, update, client, ct),
             DeleteRowsEvent delete => await DecodeDeleteRowsAsync(header, delete, client, ct),
-            _ => null,
+            _ => [],
         };
     }
 
-    private async Task<RawChangeEvent?> DecodeWriteRowsAsync(
+    private async Task<IReadOnlyList<RawChangeEvent>> DecodeWriteRowsAsync(
         EventHeader header, WriteRowsEvent ev, BinlogClient client, CancellationToken ct)
     {
         if (!_tableMap.TryGetValue(ev.TableId, out var tableMap))
         {
             _logger.LogWarning("No TableMapEvent cached for table id {TableId}", ev.TableId);
-            return null;
+            return [];
         }
 
         if (!ShouldCapture(tableMap))
-            return null;
+            return [];
+
+        var rows = ev.Rows;
+        if (rows.Count == 0)
+            return [];
 
         var columnNames = await GetColumnNamesAsync(tableMap, ct);
         var offset = BuildOffset(client);
-        var rows = ev.Rows;
-
-        if (rows.Count == 0)
-            return null;
-
-        // Emit only the first row per event. Multi-row inserts are uncommon but
-        // can occur with bulk INSERTs. TODO: buffer and emit all rows.
-        var after = BuildRowDict(rows[0].Cells, columnNames);
         var columns = BuildColumnSchemas(columnNames, tableMap);
+        var result = new List<RawChangeEvent>(rows.Count);
 
-        return BuildEvent(tableMap, header, offset, DebeTailOperation.Insert,
-            before: null, after, columns);
+        foreach (var row in rows)
+        {
+            var after = BuildRowDict(row.Cells, columnNames);
+            result.Add(BuildEvent(tableMap, header, offset, DebeTailOperation.Insert,
+                before: null, after, columns));
+        }
+
+        return result;
     }
 
-    private async Task<RawChangeEvent?> DecodeUpdateRowsAsync(
+    private async Task<IReadOnlyList<RawChangeEvent>> DecodeUpdateRowsAsync(
         EventHeader header, UpdateRowsEvent ev, BinlogClient client, CancellationToken ct)
     {
         if (!_tableMap.TryGetValue(ev.TableId, out var tableMap))
         {
             _logger.LogWarning("No TableMapEvent cached for table id {TableId}", ev.TableId);
-            return null;
+            return [];
         }
 
         if (!ShouldCapture(tableMap))
-            return null;
+            return [];
+
+        var rows = ev.Rows;
+        if (rows.Count == 0)
+            return [];
 
         var columnNames = await GetColumnNamesAsync(tableMap, ct);
         var offset = BuildOffset(client);
-        var rows = ev.Rows;
-
-        if (rows.Count == 0)
-            return null;
-
-        var before = BuildRowDict(rows[0].BeforeUpdate.Cells, columnNames);
-        var after = BuildRowDict(rows[0].AfterUpdate.Cells, columnNames);
         var columns = BuildColumnSchemas(columnNames, tableMap);
+        var result = new List<RawChangeEvent>(rows.Count);
 
-        return BuildEvent(tableMap, header, offset, DebeTailOperation.Update, before, after, columns);
+        foreach (var row in rows)
+        {
+            var before = BuildRowDict(row.BeforeUpdate.Cells, columnNames);
+            var after = BuildRowDict(row.AfterUpdate.Cells, columnNames);
+            result.Add(BuildEvent(tableMap, header, offset, DebeTailOperation.Update,
+                before, after, columns));
+        }
+
+        return result;
     }
 
-    private async Task<RawChangeEvent?> DecodeDeleteRowsAsync(
+    private async Task<IReadOnlyList<RawChangeEvent>> DecodeDeleteRowsAsync(
         EventHeader header, DeleteRowsEvent ev, BinlogClient client, CancellationToken ct)
     {
         if (!_tableMap.TryGetValue(ev.TableId, out var tableMap))
         {
             _logger.LogWarning("No TableMapEvent cached for table id {TableId}", ev.TableId);
-            return null;
+            return [];
         }
 
         if (!ShouldCapture(tableMap))
-            return null;
+            return [];
+
+        var rows = ev.Rows;
+        if (rows.Count == 0)
+            return [];
 
         var columnNames = await GetColumnNamesAsync(tableMap, ct);
         var offset = BuildOffset(client);
-        var rows = ev.Rows;
-
-        if (rows.Count == 0)
-            return null;
-
-        var before = BuildRowDict(rows[0].Cells, columnNames);
         var columns = BuildColumnSchemas(columnNames, tableMap);
+        var result = new List<RawChangeEvent>(rows.Count);
 
-        return BuildEvent(tableMap, header, offset, DebeTailOperation.Delete, before, after: null, columns);
+        foreach (var row in rows)
+        {
+            var before = BuildRowDict(row.Cells, columnNames);
+            result.Add(BuildEvent(tableMap, header, offset, DebeTailOperation.Delete,
+                before, after: null, columns));
+        }
+
+        return result;
     }
 
     private bool ShouldCapture(TableMapEvent tableMap)
@@ -155,6 +170,8 @@ public sealed partial class MariaDbSourceConnector
         Dictionary<string, object?>? after,
         List<ColumnSchema> columns)
     {
+        var offsetParts = offset.Value.Split('|', 2);
+
         return new RawChangeEvent
         {
             ConnectorId = ConnectorId,
@@ -168,8 +185,8 @@ public sealed partial class MariaDbSourceConnector
             Columns = columns,
             SourceMetadata = new Dictionary<string, object?>
             {
-                ["binlog_filename"] = offset.Value.Split('|').ElementAtOrDefault(0),
-                ["binlog_position"] = offset.Value.Split('|').ElementAtOrDefault(1),
+                ["binlog_filename"] = offsetParts.ElementAtOrDefault(0),
+                ["binlog_position"] = offsetParts.ElementAtOrDefault(1),
             },
         };
     }
