@@ -141,9 +141,21 @@ public interface IDebeTailPipelineBuildStage
 /// <summary>A running CDC pipeline that can be started, stopped, and disposed.</summary>
 public interface IDebeTailPipeline : IAsyncDisposable
 {
-    /// <summary>Starts the pipeline. Returns when the pipeline is connected and streaming.</summary>
+    /// <summary>
+    /// Starts the pipeline loop in the background and returns immediately.
+    /// To confirm the source has connected and is streaming, await <see cref="WhenReady"/>
+    /// after this call.
+    /// </summary>
     Task StartAsync(CancellationToken ct = default);
 
     /// <summary>Gracefully drains in-flight events and stops the pipeline.</summary>
     Task StopAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Completes when the pipeline has received its first event from the source, confirming
+    /// the source connection is live. Faults with the original exception if the source fails
+    /// to connect before producing any event. Await this after <see cref="StartAsync"/> when
+    /// you need an explicit readiness guarantee — it is optional and safe to ignore.
+    /// </summary>
+    Task WhenReady { get; }
 }

@@ -22,6 +22,20 @@ internal sealed class DebeTailPipelineRunner : IDebeTailPipeline
     private CancellationTokenSource? _cts;
     private Task? _loopTask;
 
+    // Completed when the first event arrives from the source (source is live and streaming),
+    // faulted if the loop dies before receiving any event (bad connection string, missing
+    // replication slot, auth failure, etc.), or completed when the stream ends cleanly with
+    // no events. Callers can optionally await WhenReady after StartAsync for a connectivity signal.
+    private readonly TaskCompletionSource _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// Completes when the pipeline has received its first event from the source, confirming
+    /// the source connection is live. Faults with the original exception if the source fails
+    /// to connect before producing any event. Await this after <see cref="StartAsync"/> when
+    /// you need an explicit readiness guarantee — it is optional and safe to ignore.
+    /// </summary>
+    public Task WhenReady => _readyTcs.Task;
+
     internal DebeTailPipelineRunner(
         ISourceConnector source,
         HashSet<string>? watchedTables,
@@ -88,56 +102,75 @@ internal sealed class DebeTailPipelineRunner : IDebeTailPipeline
         var batchStarted = DateTimeOffset.UtcNow;
         var lastOffset = ChangeOffset.None;
 
-        await foreach (var raw in _source.ReadAsync(ct))
+        try
         {
-            _logger.LogTrace("Event received: [{ConnectorId}] {Schema}.{Table} {Operation}",
-                raw.ConnectorId, raw.Schema, raw.Table, raw.Operation);
-
-            // Table filter: drop events not in the watch list
-            if (_watchedTables is not null && !_watchedTables.Contains($"{raw.Schema}.{raw.Table}"))
+            await foreach (var raw in _source.ReadAsync(ct))
             {
-                _logger.LogDebug("Event dropped (table not watched): {Schema}.{Table}", raw.Schema, raw.Table);
-                continue;
+                // Signal readiness on the first event — the source is connected and streaming.
+                _readyTcs.TrySetResult();
+
+                _logger.LogTrace("Event received: [{ConnectorId}] {Schema}.{Table} {Operation}",
+                    raw.ConnectorId, raw.Schema, raw.Table, raw.Operation);
+
+                // Table filter: drop events not in the watch list
+                if (_watchedTables is not null && !_watchedTables.Contains($"{raw.Schema}.{raw.Table}"))
+                {
+                    _logger.LogDebug("Event dropped (table not watched): {Schema}.{Table}", raw.Schema, raw.Table);
+                    continue;
+                }
+
+                // Normalize: RawChangeEvent -> DebeTailEnvelope
+                var envelope = Normalize(raw);
+
+                // User-defined predicate filters
+                if (!PassesFilters(envelope))
+                {
+                    _logger.LogDebug("Event dropped by predicate filter: [{Source}] {Schema}.{Table} {Operation}",
+                        envelope.Source, envelope.Schema, envelope.Table, envelope.Operation);
+                    continue;
+                }
+
+                // User-defined transforms (stateless, in registration order)
+                envelope = ApplyTransforms(envelope);
+
+                // Enrichment steps (async, in registration order)
+                if (_enrichmentSteps.Count > 0)
+                    envelope = await ApplyEnrichmentAsync(envelope, ct);
+
+                batch.Add(envelope);
+                lastOffset = raw.Offset;
+
+                // Flush when batch is full or has aged past the max batch window
+                var batchFull = batch.Count >= _options.MaxBatchSize;
+                var batchAged = DateTimeOffset.UtcNow - batchStarted >= _options.MaxBatchAge;
+
+                if (batchFull || batchAged)
+                {
+                    await FlushBatchAsync(batch, lastOffset, ct);
+                    batch.Clear();
+                    batchStarted = DateTimeOffset.UtcNow;
+                }
             }
 
-            // Normalize: RawChangeEvent -> DebeTailEnvelope
-            var envelope = Normalize(raw);
-
-            // User-defined predicate filters
-            if (!PassesFilters(envelope))
-            {
-                _logger.LogDebug("Event dropped by predicate filter: [{Source}] {Schema}.{Table} {Operation}",
-                    envelope.Source, envelope.Schema, envelope.Table, envelope.Operation);
-                continue;
-            }
-
-            // User-defined transforms (stateless, in registration order)
-            envelope = ApplyTransforms(envelope);
-
-            // Enrichment steps (async, in registration order)
-            if (_enrichmentSteps.Count > 0)
-                envelope = await ApplyEnrichmentAsync(envelope, ct);
-
-            batch.Add(envelope);
-            lastOffset = raw.Offset;
-
-            // Flush when batch is full or has aged past the max batch window
-            var batchFull = batch.Count >= _options.MaxBatchSize;
-            var batchAged = DateTimeOffset.UtcNow - batchStarted >= _options.MaxBatchAge;
-
-            if (batchFull || batchAged)
-            {
+            // Flush any remaining events when the source stream completes
+            if (batch.Count > 0)
                 await FlushBatchAsync(batch, lastOffset, ct);
-                batch.Clear();
-                batchStarted = DateTimeOffset.UtcNow;
-            }
+
+            _logger.LogInformation("Pipeline loop completed");
         }
-
-        // Flush any remaining events when the source stream completes
-        if (batch.Count > 0)
-            await FlushBatchAsync(batch, lastOffset, ct);
-
-        _logger.LogInformation("Pipeline loop completed");
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            // Fault WhenReady so callers awaiting it get the real startup exception
+            // (e.g. wrong connection string, missing replication slot, auth failure).
+            _readyTcs.TrySetException(ex);
+            throw;
+        }
+        finally
+        {
+            // Ensure WhenReady always completes — covers a clean empty-stream exit
+            // and the cancellation path where neither branch above has signalled it yet.
+            _readyTcs.TrySetResult();
+        }
     }
 
     private async ValueTask<DebeTailEnvelope> ApplyEnrichmentAsync(DebeTailEnvelope envelope, CancellationToken ct)
@@ -219,8 +252,9 @@ internal sealed class DebeTailPipelineRunner : IDebeTailPipeline
                 // All retries exhausted — route to dead-letter sink if configured
                 if (_deadLetterSink is not null)
                 {
-                    _logger.LogWarning("All retries exhausted, routing {Count} events to dead-letter sink", batch.Count);
-                    
+                    _logger.LogWarning("All retries exhausted, routing {Count} events to dead-letter sink",
+                        batch.Count);
+
                     await _deadLetterSink.WriteAsync(batch, ct);
                     await _deadLetterSink.FlushAsync(ct);
                 }
