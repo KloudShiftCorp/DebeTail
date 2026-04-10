@@ -20,10 +20,12 @@ namespace KloudShift.DebeTail.Sources.MariaDb;
 /// connection on the first encounter of each table. MariaDB always uses this fallback.
 /// </para>
 /// <para>
-/// <see cref="AcknowledgeAsync"/> is a no-op — the binlog is pull-based, and position
-/// tracking is the responsibility of the caller. Store the last acknowledged
-/// <see cref="ChangeOffset"/> and pass it back via <see cref="MariaDbConnectorOptions.InitialOffset"/>
-/// on restart to resume from the correct position.
+/// <b>At-least-once delivery across restarts</b> requires an <see cref="IOffsetStore"/>. When
+/// one is injected, <see cref="AcknowledgeAsync"/> persists the offset after each successfully
+/// flushed batch, and <see cref="ReadAsync"/> loads it on startup so the stream resumes from the
+/// correct position automatically. Without an offset store the connector falls back to
+/// <see cref="MariaDbConnectorOptions.InitialOffset"/>; if that is also empty it starts from the
+/// current end of the binlog (new changes only).
 /// </para>
 /// </summary>
 public sealed partial class MariaDbSourceConnector : ISourceConnector
@@ -33,16 +35,28 @@ public sealed partial class MariaDbSourceConnector : ISourceConnector
     private readonly HashSet<string> _watchedTables;
     private readonly TableSchemaCache _schemaCache;
     private readonly MySqlConnectionStringBuilder _parsedCs;
+    private readonly IOffsetStore? _offsetStore;
 
     // tableId → TableMapEvent, rebuilt when the connector starts.
-    // Accessed only from within the single ReplicateAsync callback, so no locking needed.
+    // Accessed only from within the single Replicate loop, so no locking needed.
     private readonly Dictionary<long, TableMapEvent> _tableMap = [];
 
     /// <summary>Initializes the connector and derives <see cref="ConnectorId"/> from the connection string.</summary>
-    public MariaDbSourceConnector(ILogger<MariaDbSourceConnector> logger, IOptions<MariaDbConnectorOptions> options)
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="options">Connector options.</param>
+    /// <param name="offsetStore">
+    /// Optional offset store. When provided, the last acknowledged binlog position is persisted
+    /// automatically and restored on the next startup, enabling at-least-once delivery across
+    /// process restarts without manual <see cref="MariaDbConnectorOptions.InitialOffset"/> management.
+    /// </param>
+    public MariaDbSourceConnector(
+        ILogger<MariaDbSourceConnector> logger,
+        IOptions<MariaDbConnectorOptions> options,
+        IOffsetStore? offsetStore = null)
     {
         _logger = logger;
         _options = options.Value;
+        _offsetStore = offsetStore;
 
         _parsedCs = new MySqlConnectionStringBuilder(_options.ConnectionString);
         _schemaCache = new TableSchemaCache(_options.ConnectionString);
@@ -56,7 +70,8 @@ public sealed partial class MariaDbSourceConnector : ISourceConnector
 
     /// <summary>
     /// Opens the MySQL/MariaDB binlog stream and yields change events as they arrive.
-    /// Set <see cref="MariaDbConnectorOptions.InitialOffset"/> to resume from a saved position.
+    /// Resumes from the position stored in <see cref="IOffsetStore"/> (if configured), then from
+    /// <see cref="MariaDbConnectorOptions.InitialOffset"/>, then from the current binlog end.
     /// </summary>
     public async IAsyncEnumerable<RawChangeEvent> ReadAsync([EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -91,12 +106,19 @@ public sealed partial class MariaDbSourceConnector : ISourceConnector
     }
 
     /// <summary>
-    /// No-op — MySQL/MariaDB binlog position tracking is external.
-    /// Persist the <paramref name="offset"/> value and pass it back via
-    /// <see cref="MariaDbConnectorOptions.InitialOffset"/> on the next startup.
+    /// Persists <paramref name="offset"/> to the configured <see cref="IOffsetStore"/> so the
+    /// connector can resume from this position on the next startup.
+    /// If no offset store is configured this method is a no-op — see class remarks.
     /// </summary>
     /// <inheritdoc/>
-    public Task AcknowledgeAsync(ChangeOffset offset, CancellationToken ct = default) => Task.CompletedTask;
+    public async Task AcknowledgeAsync(ChangeOffset offset, CancellationToken ct = default)
+    {
+        if (_offsetStore is null || offset == ChangeOffset.None)
+            return;
+
+        await _offsetStore.SaveAsync(ConnectorId, offset, ct);
+        _logger.LogDebug("Persisted binlog offset: {Offset}", offset.Value);
+    }
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
