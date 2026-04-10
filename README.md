@@ -5,8 +5,42 @@ C# and targeting enterprise .NET consumers.
 
 Reads database write events (INSERT, UPDATE, DELETE) via native replication mechanisms, normalizes them into a
 `DebeTailEnvelope`, and routes them to message brokers or storage sinks.
+---
+## Features
+
+* Dead-letter queue for failed batches
+* Batching and offset tracking
+* Retry logic with configurable backoff
+* At-least-once delivery
+* Pluggable normalization and filtering
+* Pluggable sink connectors
+* Pluggable serializers
+---
+## Limitations
+
+* The MariaDB source connector currently doesn't support multi-row INSERTs
 
 ---
+## Pipeline architecture
+
+```
+[ Source layer ]
+  Postgres | SQL Server 2016+ | MySQL/MariaDB | Custom (ISourceConnector)
+  
+       ⬇️ IAsyncEnumerable<RawChangeEvent>
+       
+[ Pipeline core ]
+  Watch ➡️ Normalize ➡️ Filter ➡️ Transform ➡️ Batch
+  
+       ⬇️ IReadOnlyList<DebeTailEnvelope>
+       
+[ Sink layer ]
+  Console | Kafka | Event Hub | RabbitMQ | ...
+```
+
+**At-least-once delivery:** the pipeline calls `ISinkConnector.FlushAsync()` to confirm a durable write, then calls
+`ISourceConnector.AcknowledgeAsync(offset)` to advance the WAL/binlog position. Offset advancement never precedes sink
+confirmation.
 
 ## Requirements
 
@@ -127,28 +161,7 @@ var pipeline = DebeTailPipeline
 await pipeline.StartAsync(cancellationToken);
 ```
 
----
 
-## Pipeline architecture
-
-```
-[ Source layer ]
-  Postgres | SQL Server 2016+ | MySQL/MariaDB | Custom (ISourceConnector)
-  
-       ⬇️ IAsyncEnumerable<RawChangeEvent>
-       
-[ Pipeline core ]
-  Watch ➡️ Normalize ➡️ Filter ➡️ Transform ➡️ Batch
-  
-       ⬇️ IReadOnlyList<DebeTailEnvelope>
-       
-[ Sink layer ]
-  Console | Kafka | Event Hub | RabbitMQ | ...
-```
-
-**At-least-once delivery:** the pipeline calls `ISinkConnector.FlushAsync()` to confirm a durable write, then calls
-`ISourceConnector.AcknowledgeAsync(offset)` to advance the WAL/binlog position. Offset advancement never precedes sink
-confirmation.
 
 ---
 

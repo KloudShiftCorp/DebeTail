@@ -35,6 +35,7 @@ public sealed class ConsoleSinkConnector(
             logger.LogInformation("[{Operation}] {Relation} {Text}",
                 envelope.Operation, envelope.Relation, text);
         }
+        
         return Task.CompletedTask;
     }
 

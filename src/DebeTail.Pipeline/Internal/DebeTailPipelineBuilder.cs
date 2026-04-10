@@ -96,6 +96,18 @@ internal sealed class DebeTailPipelineBuilder :
         if (_sink is null)
             throw new InvalidOperationException("A sink must be registered via SinkTo() before calling Build().");
 
+        if (_options.MaxBatchSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(_options.MaxBatchSize), _options.MaxBatchSize, "MaxBatchSize must be greater than zero.");
+
+        if (_options.MaxRetries < 0)
+            throw new ArgumentOutOfRangeException(nameof(_options.MaxRetries), _options.MaxRetries, "MaxRetries must be zero or greater.");
+
+        if (_options.MaxBatchAge <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(_options.MaxBatchAge), _options.MaxBatchAge, "MaxBatchAge must be a positive duration.");
+
+        if (_options.RetryDelay < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(_options.RetryDelay), _options.RetryDelay, "RetryDelay must be zero or greater.");
+
         return new DebeTailPipelineRunner(
             source: _source,
             watchedTables: _watchAll ? null : _watchedTables,
