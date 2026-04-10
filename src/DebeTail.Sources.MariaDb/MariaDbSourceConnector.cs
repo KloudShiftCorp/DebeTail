@@ -108,7 +108,7 @@ public sealed partial class MariaDbSourceConnector : ISourceConnector
     /// <summary>
     /// Persists <paramref name="offset"/> to the configured <see cref="IOffsetStore"/> so the
     /// connector can resume from this position on the next startup.
-    /// If no offset store is configured this method is a no-op — see class remarks.
+    /// If no offset store is configured, this method is a no-op — see class remark.
     /// </summary>
     /// <inheritdoc/>
     public async Task AcknowledgeAsync(ChangeOffset offset, CancellationToken ct = default)
