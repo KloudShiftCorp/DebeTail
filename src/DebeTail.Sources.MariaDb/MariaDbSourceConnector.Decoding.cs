@@ -155,6 +155,8 @@ public sealed partial class MariaDbSourceConnector
         Dictionary<string, object?>? after,
         List<ColumnSchema> columns)
     {
+        var offsetParts = offset.Value.Split('|', 2);
+
         return new RawChangeEvent
         {
             ConnectorId = ConnectorId,
@@ -168,8 +170,8 @@ public sealed partial class MariaDbSourceConnector
             Columns = columns,
             SourceMetadata = new Dictionary<string, object?>
             {
-                ["binlog_filename"] = offset.Value.Split('|').ElementAtOrDefault(0),
-                ["binlog_position"] = offset.Value.Split('|').ElementAtOrDefault(1),
+                ["binlog_filename"] = offsetParts.ElementAtOrDefault(0),
+                ["binlog_position"] = offsetParts.ElementAtOrDefault(1),
             },
         };
     }
