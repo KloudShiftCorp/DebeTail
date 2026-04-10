@@ -54,7 +54,10 @@ public sealed partial class PostgresSourceConnector
             Table = relation.RelationName,
             Operation = operation,
             Offset = new ChangeOffset(walEnd.ToString()),
-            OccurredAt = new DateTimeOffset(serverClock, TimeSpan.Zero),
+            // Postgres WAL timestamps are always UTC, but Npgsql deserializes them with
+            // DateTimeKind.Unspecified. SpecifyKind makes the intent explicit and ensures
+            // serializers and comparisons treat the value correctly as UTC.
+            OccurredAt = new DateTimeOffset(DateTime.SpecifyKind(serverClock, DateTimeKind.Utc)),
             Before = before ?? new Dictionary<string, object?>(),
             After = after ?? new Dictionary<string, object?>(),
             Columns = columns,
