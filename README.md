@@ -6,21 +6,59 @@ C# and targeting enterprise .NET consumers.
 Reads database write events (INSERT, UPDATE, DELETE) via native replication mechanisms, normalizes them into a
 `DebeTailEnvelope`, and routes them to message brokers or storage sinks.
 ---
+
 ## Features
 
-* Dead-letter queue for failed batches
-* Batching and offset tracking
-* Retry logic with configurable backoff
-* At-least-once delivery
-* Pluggable normalization and filtering
-* Pluggable sink connectors
-* Pluggable serializers
+* **Multiple source connectors** — Postgres WAL logical replication, MySQL/MariaDB binlog, SQL Server CDC
+* **Fluent pipeline builder** — chainable `.Watch()`, `.Filter()`, `.Transform()`, `.SinkTo()`, `.Build()` API
+* **DI / hosted service integration** — `AddDebeTail()` registers sources, sinks, and a background `IHostedService`
+* **At-least-once delivery** — offset is only advanced after the sink confirms a durable write via `FlushAsync`
+* **Batching and offset tracking** — configurable `MaxBatchSize` and `MaxBatchAge` flush window
+* **Retry logic with configurable backoff** — `MaxRetries` attempts with `RetryDelay` between each
+* **Dead-letter queue for failed batches** — route exhausted batches to a secondary sink instead of crashing
+* **Table watch list filtering** — subscribe to specific `schema.table` pairs or watch all tables
+* **User-defined predicate filters** — drop events inline before they reach the sink
+* **Stateless transforms** — reshape or annotate envelopes in registration order
+* **Async enrichment steps** — `IEnrichmentStep` for async lookups and snapshot joins
+* **Fan-out to multiple sinks** — deliver every batch to N sinks via `SinkTo(IEnumerable<ISinkConnector>)`
+* **Multi-source pipelines** — merge N source connectors into a single event stream
+* **Pluggable serializers** — `ISerializer` abstraction; JSON included, Avro/Protobuf/CloudEvents available commercially
+* **Custom sources and sinks** — implement `ISourceConnector` or `ISinkConnector` to integrate any system
+* **Framework-agnostic test doubles** — `InMemorySourceConnector`, `ControllableSourceConnector`,
+  `CapturingSinkConnector`, and fluent builders ship in `DebeTail.Testing`
+* **Zero-dependency abstractions** — `DebeTail.Abstractions` has no external dependencies; safe to reference from any
+  layer
+
 ---
+
 ## Limitations
 
-* The MariaDB source connector currently doesn't support multi-row INSERTs
+Please be aware that this is an early version of the project and the limitations listed bellow currently apply. I am
+happy for any feedback and contributions 🚀.
+
+* **MariaDB/MySQL: multi-row DML emits only the first row** — bulk `INSERT ... VALUES (...),(...)`, multi-row `UPDATE`,
+  and multi-row `DELETE` statements produce one event per statement instead of one per row; remaining rows are silently
+  dropped
+* **At-least-once delivery only** — exactly-once is not supported; retries and crash-recovery replays can re-deliver the
+  same event; consumers must deduplicate using `DebeTailEnvelope.EventId`
+* **MySQL/MariaDB and SQL Server: offset tracking is the caller's responsibility** — `AcknowledgeAsync` is a no-op on
+  both connectors; you must persist the last `ChangeOffset.Value` and restore it via `InitialOffset` on restart to avoid
+  reprocessing or gaps
+* **SQL Server: events are unrecoverable after the CDC retention window** — SQL Server's CDC cleanup job deletes change
+  table rows on a schedule (default: 3 days); if the pipeline is down longer than the configured retention period, those
+  events are permanently gone
+* **Postgres: a stalled pipeline causes WAL disk growth** — the replication slot prevents the database from recycling
+  WAL segments until `AcknowledgeAsync` advances the slot position; a pipeline that is stopped for an extended period
+  will cause unbounded WAL accumulation on the Postgres server
+* **`StartAsync` returns before source connectivity is confirmed** — the pipeline loop runs in a background task;
+  connection failures surface asynchronously via a log error rather than as an exception from `StartAsync`
+* **`Watch()` table names are matched case-sensitively** — names must exactly match the casing the database returns (
+  Postgres returns lowercase identifiers by default)
+* **Enrichment, stream joins, and schema registry are commercial-only** — `DebeTail.Enrichment`, the planned join
+  engine, and schema registry integration are not part of the free tier
 
 ---
+
 ## Pipeline architecture
 
 ```
@@ -55,8 +93,8 @@ confirmation.
 
 ### Free / OSS (MIT)
 
-| Package                      | Purpose                                                                                                            |
-|------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| Package                     | Purpose                                                                                                            |
+|-----------------------------|--------------------------------------------------------------------------------------------------------------------|
 | `DebeTail.Abstractions`     | Interfaces and models. Zero external dependencies — the contract every package references.                         |
 | `DebeTail.Pipeline`         | Pipeline runtime: fluent `DebeTailPipeline` builder, async event loop, batching, offset tracking, DI registration. |
 | `DebeTail.Sources.Postgres` | Postgres WAL logical replication source via Npgsql.                                                                |
@@ -66,19 +104,19 @@ confirmation.
 
 ### Commercial (BSL)
 
-| Package                                     | Purpose                                       |
-|---------------------------------------------|-----------------------------------------------|
-| `DebeTail.Sources.SqlServer`                | SQL Server CDC source via Microsoft.Data.SqlClient.           |
-| `DebeTail.Sinks.AzureBlob`                  | Azure Blob Storage sink.                                      |
-| `DebeTail.Serializers.CloudEvents`          | CloudEvents v1.0 structured JSON serializer.                  |
-| `DebeTail.Sinks.Kafka`                      | Apache Kafka sink.                                            |
-| `DebeTail.Sinks.EventHub` _(planned)_       | Azure Event Hubs sink.                                        |
-| `DebeTail.Sinks.RabbitMq`                   | RabbitMQ sink.                                                |
-| `DebeTail.Sinks.S3` _(planned)_             | AWS S3 sink.                                                  |
-| `DebeTail.Serializers.Avro` _(planned)_     | Avro serializer with Schema Registry support.                 |
-| `DebeTail.Serializers.Protobuf` _(planned)_ | Protobuf serializer.                                          |
-| `DebeTail.Enrichment`                       | Snapshot and lookup-based enrichment for CDC pipelines.       |
-| `DebeTail.Telemetry` _(planned)_            | OpenTelemetry metrics and tracing.                            |
+| Package                                     | Purpose                                                 |
+|---------------------------------------------|---------------------------------------------------------|
+| `DebeTail.Sources.SqlServer`                | SQL Server CDC source via Microsoft.Data.SqlClient.     |
+| `DebeTail.Sinks.AzureBlob`                  | Azure Blob Storage sink.                                |
+| `DebeTail.Serializers.CloudEvents`          | CloudEvents v1.0 structured JSON serializer.            |
+| `DebeTail.Sinks.Kafka`                      | Apache Kafka sink.                                      |
+| `DebeTail.Sinks.EventHub` _(planned)_       | Azure Event Hubs sink.                                  |
+| `DebeTail.Sinks.RabbitMq`                   | RabbitMQ sink.                                          |
+| `DebeTail.Sinks.S3` _(planned)_             | AWS S3 sink.                                            |
+| `DebeTail.Serializers.Avro` _(planned)_     | Avro serializer with Schema Registry support.           |
+| `DebeTail.Serializers.Protobuf` _(planned)_ | Protobuf serializer.                                    |
+| `DebeTail.Enrichment`                       | Snapshot and lookup-based enrichment for CDC pipelines. |
+| `DebeTail.Telemetry` _(planned)_            | OpenTelemetry metrics and tracing.                      |
 
 ---
 
@@ -160,8 +198,6 @@ var pipeline = DebeTailPipeline
 
 await pipeline.StartAsync(cancellationToken);
 ```
-
-
 
 ---
 
