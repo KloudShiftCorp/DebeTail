@@ -17,20 +17,20 @@ public class Program
 
         builder.Services.AddDebeTail(c =>
         {
-            c.UsePostgres(o =>
-            {
-                o.ConnectionString = builder.Configuration.GetConnectionString("Postgres") ??
-                                     throw new InvalidOperationException("Postgres connection string not found");
-                o.SlotName = "slot1";
-                o.PublicationName = "pub1";
-                o.AutoConfigureReplication = true;
-            });
-
-            // c.UseMariaDb(o =>
+            // c.UsePostgres(o =>
             // {
-            //     o.ConnectionString = builder.Configuration.GetConnectionString("MariaDb")
-            //         ?? throw new InvalidOperationException("MariaDb connection string not found");
+            //     o.ConnectionString = builder.Configuration.GetConnectionString("Postgres") ??
+            //                          throw new InvalidOperationException("Postgres connection string not found");
+            //     o.SlotName = "slot1";
+            //     o.PublicationName = "pub1";
+            //     o.AutoConfigureReplication = true;
             // });
+
+            c.UseMariaDb(o =>
+            {
+                o.ConnectionString = builder.Configuration.GetConnectionString("MariaDb")
+                    ?? throw new InvalidOperationException("MariaDb connection string not found");
+            });
         });
 
         builder.Services.AddConsoleSink();
