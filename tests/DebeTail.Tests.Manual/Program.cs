@@ -31,6 +31,9 @@ public class Program
                 o.ConnectionString = builder.Configuration.GetConnectionString("MariaDb")
                     ?? throw new InvalidOperationException("MariaDb connection string not found");
             });
+
+            // Provides at-least-once for MySQL/MariaDB & SqlServer across restarts
+            c.UseFileOffsetStore("./offsets");
         });
 
         builder.Services.AddConsoleSink();

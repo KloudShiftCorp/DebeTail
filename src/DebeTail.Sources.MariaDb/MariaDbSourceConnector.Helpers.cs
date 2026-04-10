@@ -1,3 +1,4 @@
+using KloudShift.DebeTail.Abstractions;
 using KloudShift.DebeTail.Sources.MariaDb.Configuration;
 using Microsoft.Extensions.Logging;
 using MySqlCdc;
@@ -8,19 +9,46 @@ namespace KloudShift.DebeTail.Sources.MariaDb;
 public sealed partial class MariaDbSourceConnector
 {
         /// <summary>
-    /// Resolves the starting binlog position. When <see cref="MariaDbConnectorOptions.InitialOffset"/>
-    /// is set, parses and uses it directly. Otherwise queries the server for the current binlog
-    /// position using <c>SHOW BINARY LOG STATUS</c> (MySQL 8.2+) or <c>SHOW MASTER STATUS</c>
-    /// (MariaDB / MySQL &lt; 8.2), falling back between the two automatically.
+    /// Resolves the starting binlog position using the following priority order:
+    /// <list type="number">
+    ///   <item>Persisted offset from <see cref="IOffsetStore"/> (if configured and non-empty).</item>
+    ///   <item><see cref="MariaDbConnectorOptions.InitialOffset"/> from options (if set).</item>
+    ///   <item>Current binlog position queried from the server via <c>SHOW BINARY LOG STATUS</c>
+    ///   (MySQL 8.2+) or <c>SHOW MASTER STATUS</c> (MariaDB / MySQL &lt; 8.2).</item>
+    /// </list>
     /// </summary>
     private async Task<BinlogOptions> ResolveBinlogOptionsAsync(CancellationToken ct)
     {
+        // 1. Offset store — takes priority so restarts always resume from the last acked position.
+        if (_offsetStore is not null)
+        {
+            var stored = await _offsetStore.LoadAsync(ConnectorId, ct);
+            if (stored is not null)
+            {
+                var parts = stored.Value.Split('|', 2);
+                if (parts.Length == 2 && long.TryParse(parts[1], out var storedPosition))
+                {
+                    _logger.LogInformation(
+                        "Resuming MySQL/MariaDB binlog from stored offset: {Offset}", stored.Value);
+                    return BinlogOptions.FromPosition(parts[0], storedPosition);
+                }
+
+                _logger.LogWarning(
+                    "Stored offset '{Offset}' could not be parsed; falling back to InitialOffset", stored.Value);
+            }
+        }
+
+        // 2. InitialOffset from options.
         if (!string.IsNullOrWhiteSpace(_options.InitialOffset))
         {
             var parts = _options.InitialOffset.Split('|', 2);
 
             if (parts.Length == 2 && long.TryParse(parts[1], out var savedPosition))
                 return BinlogOptions.FromPosition(parts[0], savedPosition);
+
+            _logger.LogWarning(
+                "InitialOffset '{InitialOffset}' could not be parsed; starting from current binlog position",
+                _options.InitialOffset);
         }
 
         // MySQL 8.2+ removed SHOW MASTER STATUS in favor of SHOW BINARY LOG STATUS.

@@ -14,6 +14,9 @@ Reads database write events (INSERT, UPDATE, DELETE) via native replication mech
 * **Fluent pipeline builder** — chainable `.Watch()`, `.Filter()`, `.Transform()`, `.SinkTo()`, `.Build()` API
 * **DI / hosted service integration** — `AddDebeTail()` registers sources, sinks, and a background `IHostedService`
 * **At-least-once delivery** — offset is only advanced after the sink confirms a durable write via `FlushAsync`
+* **Automatic offset persistence** — inject an `IOffsetStore` to resume from the last acknowledged position on
+  restart without manual `InitialOffset` management; `FileOffsetStore` (file-based, zero extra deps) and
+  `InMemoryOffsetStore` (test double) are included out of the box
 * **Batching and offset tracking** — configurable `MaxBatchSize` and `MaxBatchAge` flush window
 * **Retry logic with configurable backoff** — `MaxRetries` attempts with `RetryDelay` between each
 * **Dead-letter queue for failed batches** — route exhausted batches to a secondary sink instead of crashing
@@ -42,15 +45,14 @@ happy for any feedback and contributions 🚀.
   dropped
 * **At-least-once delivery only** — exactly-once is not supported; retries and crash-recovery replays can re-deliver the
   same event; consumers must deduplicate using `DebeTailEnvelope.EventId`. For Postgres the guarantee holds
-  automatically across restarts via the replication slot; for MySQL/MariaDB and SQL Server it requires manual offset
-  persistence (see below).
-* **MySQL/MariaDB and SQL Server: at-least-once across restarts requires manual offset persistence** —
-  `AcknowledgeAsync` is a no-op on both connectors; the pipeline does not persist the acknowledged offset
-  automatically. If `InitialOffset` is empty on startup, the connector starts from the **current end** of the
-  binlog/CDC log and **silently skips** all events that occurred while the pipeline was down. To guarantee
-  at-least-once delivery across restarts you must persist the last `ChangeOffset.Value` from a successfully flushed
-  batch and pass it back as `InitialOffset` on the next startup. This contrasts with the Postgres connector, where
-  the replication slot retains WAL data server-side until `AcknowledgeAsync` advances the slot position.
+  automatically across restarts via the replication slot; for MySQL/MariaDB and SQL Server it requires an
+  `IOffsetStore` (see below).
+* **MySQL/MariaDB and SQL Server: at-least-once across restarts requires an `IOffsetStore`** — unlike Postgres,
+  these connectors have no server-side position tracking. Without an offset store, `AcknowledgeAsync` is a no-op and
+  if `InitialOffset` is empty on startup the connector starts from the **current end** of the binlog/CDC log,
+  **silently skipping** all events that accumulated while the pipeline was down. Register `UseFileOffsetStore()` (or
+  a custom `IOffsetStore` implementation) to have offsets persisted and restored automatically. See
+  [Resuming after restart](#resuming-after-restart).
 * **SQL Server: events are unrecoverable after the CDC retention window** — SQL Server's CDC cleanup job deletes change
   table rows on a schedule (default: 3 days); if the pipeline is down longer than the configured retention period, those
   events are permanently gone
@@ -103,11 +105,11 @@ confirmation.
 | Package                     | Purpose                                                                                                            |
 |-----------------------------|--------------------------------------------------------------------------------------------------------------------|
 | `DebeTail.Abstractions`     | Interfaces and models. Zero external dependencies — the contract every package references.                         |
-| `DebeTail.Pipeline`         | Pipeline runtime: fluent `DebeTailPipeline` builder, async event loop, batching, offset tracking, DI registration. |
+| `DebeTail.Pipeline`         | Pipeline runtime: fluent `DebeTailPipeline` builder, async event loop, batching, offset tracking, DI registration. Includes `FileOffsetStore` for durable offset persistence. |
 | `DebeTail.Sources.Postgres` | Postgres WAL logical replication source via Npgsql.                                                                |
 | `DebeTail.Sources.MariaDb`  | MySQL and MariaDB binlog source via MySqlCdc.                                                                      |
 | `DebeTail.Sinks.Console`    | Stdout sink for local dev and containerised deployments.                                                           |
-| `DebeTail.Testing`          | Framework-agnostic test doubles and builders for pipeline tests.                                                   |
+| `DebeTail.Testing`          | Framework-agnostic test doubles and builders for pipeline tests. Includes `InMemoryOffsetStore`.                   |
 
 ### Commercial (BSL)
 
@@ -183,8 +185,11 @@ builder.Services.AddDebeTail(c =>
         o.ConnectionString = "Server=localhost;Port=3306;Database=mydb;User Id=repl_user;Password=...;";
         o.ServerId        = 100;
         o.TableNames      = ["mydb.orders", "mydb.customers"];
-        o.InitialOffset   = ""; // leave empty to start from end; set to resume
     });
+
+    // Persist the acknowledged binlog position to disk so the connector resumes
+    // from the correct position on restart (at-least-once across restarts).
+    c.UseFileOffsetStore("./offsets");
 
     c.UseConsoleSink();
 });
@@ -233,8 +238,9 @@ the next startup:
 
 - **Postgres**: The replication slot still holds the original WAL position; the database replays all unacknowledged
   events automatically.
-- **MySQL / MariaDB**: `AcknowledgeAsync` is a no-op (the binlog is pull-based). You must persist the last
-  `ChangeOffset.Value` yourself and pass it back as `InitialOffset` on restart.
+- **MySQL / MariaDB**: The binlog is pull-based — there is no server-side position tracking. If an `IOffsetStore`
+  is configured (recommended), the last acknowledged position is persisted automatically and restored on the next
+  startup. Without one, you must set `InitialOffset` manually or events since the last run will be missed.
   See [Resuming after restart](#resuming-after-restart).
 
 ### Batching and offset tracking
@@ -508,20 +514,33 @@ configuration is required beyond `binlog_format=ROW`.
 
 ### Resuming after restart
 
-`AcknowledgeAsync` is a no-op — the binlog is pull-based and there is no server-side WAL position to advance. To resume
-from a saved position, persist the last `ChangeOffset.Value` (format: `"{binlog_filename}|{position}"`) and pass it back
-as `InitialOffset` on restart:
+The recommended approach is to register an `IOffsetStore`. The connector then persists the acknowledged binlog position
+after every successful batch flush and restores it automatically on startup — no manual `InitialOffset` management
+required:
 
 ```csharp
-// Persist on acknowledge
+builder.Services.AddDebeTail(c =>
+{
+    c.UseMariaDb(o => { o.ConnectionString = "..."; });
+    c.UseFileOffsetStore("./offsets"); // one JSON file per connector, created automatically
+});
+```
+
+`FileOffsetStore` uses a temp-file + rename pattern to avoid corrupt offset files on unexpected shutdown.
+
+**Without an offset store**, you can still manage the position manually via `InitialOffset`. The offset format is
+`"{binlog_filename}|{position}"`, matching the values in `SHOW BINARY LOG STATUS` / `SHOW MASTER STATUS`:
+
+```csharp
+// Persist after each successful batch (e.g. in a transform or custom sink)
 await File.WriteAllTextAsync("offset.txt", envelope.Offset.Value);
 
 // Restore on startup
 o.InitialOffset = await File.ReadAllTextAsync("offset.txt");
 ```
 
-Leaving `InitialOffset` empty starts from the end of the current binlog (captures only changes that arrive after the
-connector starts).
+Leaving both `InitialOffset` and the offset store unconfigured starts from the end of the current binlog (captures only
+changes that arrive after the connector starts).
 
 ### Column names
 
