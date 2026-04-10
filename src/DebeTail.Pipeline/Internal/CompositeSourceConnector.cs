@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using KloudShift.DebeTail.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace KloudShift.DebeTail.Pipeline.Internal;
 
@@ -15,13 +17,29 @@ namespace KloudShift.DebeTail.Pipeline.Internal;
 /// Offset encoding: every <see cref="RawChangeEvent.Offset"/> emitted by this connector
 /// takes the form <c>"&lt;connectorId&gt;|&lt;rawOffset&gt;"</c>.
 /// The pipe character (<c>|</c>) must not appear in any child connector's
-/// <see cref="ISourceConnector.ConnectorId"/>.
+/// <see cref="ISourceConnector.ConnectorId"/> — it is validated at construction time.
 /// </para>
 /// </remarks>
-internal sealed class CompositeSourceConnector(IReadOnlyList<ISourceConnector> sources) : ISourceConnector
+internal sealed class CompositeSourceConnector(
+    IReadOnlyList<ISourceConnector> sources,
+    ILogger<CompositeSourceConnector>? logger = null) : ISourceConnector
 {
+    private readonly ILogger<CompositeSourceConnector> _logger =
+        logger ?? NullLogger<CompositeSourceConnector>.Instance;
+
     private readonly IReadOnlyDictionary<string, ISourceConnector> _sourceById =
-        sources.ToDictionary(s => s.ConnectorId);
+        sources.ToDictionary(s =>
+        {
+            // The pipe character is the separator in composite offset encoding ("<id>|<offset>").
+            // A ConnectorId that contains '|' would corrupt offset parsing and silently drop all acks.
+            if (s.ConnectorId.Contains('|'))
+                throw new ArgumentException(
+                    $"Connector ID '{s.ConnectorId}' contains a pipe character ('|'), which is reserved " +
+                    "for composite offset encoding. Rename the connector to remove it.",
+                    nameof(sources));
+
+            return s.ConnectorId;
+        });
 
     public string ConnectorId { get; } =
         $"composite:[{string.Join(",", sources.Select(s => s.ConnectorId))}]";
@@ -75,14 +93,29 @@ internal sealed class CompositeSourceConnector(IReadOnlyList<ISourceConnector> s
 
         var pipeIndex = offset.Value.IndexOf('|');
         if (pipeIndex < 0)
+        {
+            // Offset is not in the composite format "<connectorId>|<rawOffset>".
+            // Should never happen in normal operation — the offset was not produced by this connector.
+            _logger.LogWarning(
+                "CompositeSourceConnector received an offset with no pipe separator, ack skipped: {Offset}",
+                offset.Value);
             return Task.CompletedTask;
+        }
 
         var connectorId = offset.Value[..pipeIndex];
         var rawOffset = offset.Value[(pipeIndex + 1)..];
 
-        return _sourceById.TryGetValue(connectorId, out var source)
-            ? source.AcknowledgeAsync(new ChangeOffset(rawOffset), ct)
-            : Task.CompletedTask;
+        if (!_sourceById.TryGetValue(connectorId, out var source))
+        {
+            // The connector ID encoded in the offset does not match any registered child.
+            // This indicates a corrupted or stale offset.
+            _logger.LogWarning(
+                "CompositeSourceConnector could not route ack — unknown connector ID '{ConnectorId}' in offset '{Offset}'",
+                connectorId, offset.Value);
+            return Task.CompletedTask;
+        }
+
+        return source.AcknowledgeAsync(new ChangeOffset(rawOffset), ct);
     }
 
     public async ValueTask DisposeAsync()

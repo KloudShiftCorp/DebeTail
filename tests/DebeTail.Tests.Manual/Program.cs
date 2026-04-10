@@ -26,11 +26,11 @@ public class Program
                 o.AutoConfigureReplication = true;
             });
 
-            c.UseMariaDb(o =>
-            {
-                o.ConnectionString = builder.Configuration.GetConnectionString("MariaDb")
-                    ?? throw new InvalidOperationException("MariaDb connection string not found");
-            });
+            // c.UseMariaDb(o =>
+            // {
+            //     o.ConnectionString = builder.Configuration.GetConnectionString("MariaDb")
+            //         ?? throw new InvalidOperationException("MariaDb connection string not found");
+            // });
         });
 
         builder.Services.AddConsoleSink();
