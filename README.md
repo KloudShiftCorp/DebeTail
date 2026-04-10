@@ -41,10 +41,16 @@ happy for any feedback and contributions 🚀.
   and multi-row `DELETE` statements produce one event per statement instead of one per row; remaining rows are silently
   dropped
 * **At-least-once delivery only** — exactly-once is not supported; retries and crash-recovery replays can re-deliver the
-  same event; consumers must deduplicate using `DebeTailEnvelope.EventId`
-* **MySQL/MariaDB and SQL Server: offset tracking is the caller's responsibility** — `AcknowledgeAsync` is a no-op on
-  both connectors; you must persist the last `ChangeOffset.Value` and restore it via `InitialOffset` on restart to avoid
-  reprocessing or gaps
+  same event; consumers must deduplicate using `DebeTailEnvelope.EventId`. For Postgres the guarantee holds
+  automatically across restarts via the replication slot; for MySQL/MariaDB and SQL Server it requires manual offset
+  persistence (see below).
+* **MySQL/MariaDB and SQL Server: at-least-once across restarts requires manual offset persistence** —
+  `AcknowledgeAsync` is a no-op on both connectors; the pipeline does not persist the acknowledged offset
+  automatically. If `InitialOffset` is empty on startup, the connector starts from the **current end** of the
+  binlog/CDC log and **silently skips** all events that occurred while the pipeline was down. To guarantee
+  at-least-once delivery across restarts you must persist the last `ChangeOffset.Value` from a successfully flushed
+  batch and pass it back as `InitialOffset` on the next startup. This contrasts with the Postgres connector, where
+  the replication slot retains WAL data server-side until `AcknowledgeAsync` advances the slot position.
 * **SQL Server: events are unrecoverable after the CDC retention window** — SQL Server's CDC cleanup job deletes change
   table rows on a schedule (default: 3 days); if the pipeline is down longer than the configured retention period, those
   events are permanently gone
