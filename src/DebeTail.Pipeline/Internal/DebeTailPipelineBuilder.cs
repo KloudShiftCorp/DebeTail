@@ -14,7 +14,7 @@ internal sealed class DebeTailPipelineBuilder :
     IDebeTailPipelineBuildStage
 {
     private readonly ISourceConnector _source;
-    private readonly HashSet<string> _watchedTables = [];
+    private readonly HashSet<string> _watchedTables = new(StringComparer.OrdinalIgnoreCase);
     private bool _watchAll;
     private readonly List<Func<DebeTailEnvelope, bool>> _filters = [];
     private readonly List<Func<DebeTailEnvelope, DebeTailEnvelope>> _transforms = [];
