@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/misc/">
     <File Path=".gitignore" />
+    <File Path="CONTRIBUTING.md" />
     <File Path="Directory.Build.props" />
     <File Path="global.json" />
     <File Path="LICENSE" />
