@@ -247,16 +247,30 @@ internal sealed class DebeTailPipelineRunner : IDebeTailPipeline
                     attempt + 1, _options.MaxRetries, (int)_options.RetryDelay.TotalMilliseconds);
                 await Task.Delay(_options.RetryDelay, ct);
             }
-            catch
+            catch (Exception sinkException)
             {
-                // All retries exhausted — route to dead-letter sink if configured
+                // All retries exhausted — always log the original exception so it is never
+                // silently swallowed, even when dead-letter routing succeeds.
+                _logger.LogError(sinkException,
+                    "Sink write failed after {MaxRetries} retries for batch of {Count} events",
+                    _options.MaxRetries, batch.Count);
+
                 if (_deadLetterSink is not null)
                 {
-                    _logger.LogWarning("All retries exhausted, routing {Count} events to dead-letter sink",
-                        batch.Count);
+                    _logger.LogWarning("Routing {Count} events to dead-letter sink", batch.Count);
 
-                    await _deadLetterSink.WriteAsync(batch, ct);
-                    await _deadLetterSink.FlushAsync(ct);
+                    try
+                    {
+                        await _deadLetterSink.WriteAsync(batch, ct);
+                        await _deadLetterSink.FlushAsync(ct);
+                    }
+                    catch (Exception deadLetterException)
+                    {
+                        // Dead-letter write also failed — surface both exceptions so neither is lost.
+                        throw new AggregateException(
+                            "Sink write failed and dead-letter routing also failed.",
+                            sinkException, deadLetterException);
+                    }
                 }
                 else
                 {
