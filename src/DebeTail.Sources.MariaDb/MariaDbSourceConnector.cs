@@ -17,11 +17,11 @@ namespace KloudShift.DebeTail.Sources.MariaDb;
 /// <para>
 /// Column names are sourced from <c>TableMapEvent.TableMetadata.ColumnNames</c> when the
 /// MySQL server has <c>binlog_row_metadata=FULL</c> set (MySQL 8.0+ only; not supported by
-/// MariaDB). Otherwise they are fetched from <c>INFORMATION_SCHEMA.COLUMNS</c> via a regular
+/// MariaDB). Otherwise, they are fetched from <c>INFORMATION_SCHEMA.COLUMNS</c> via a regular
 /// connection on the first encounter of each table. MariaDB always uses this fallback.
 /// </para>
 /// <para>
-/// <see cref="AcknowledgeAsync"/> is a no-op — the binlog is pull-based and position
+/// <see cref="AcknowledgeAsync"/> is a no-op — the binlog is pull-based, and position
 /// tracking is the responsibility of the caller. Store the last acknowledged
 /// <see cref="ChangeOffset"/> and pass it back via <see cref="MariaDbConnectorOptions.InitialOffset"/>
 /// on restart to resume from the correct position.
